@@ -82,11 +82,20 @@ where
 pub fn parse_flexible_datetime_to_unix<Tz: TimeZone>(input: &str, local_tz: &Tz) -> Option<i64> {
     let s = input.trim();
 
-    // e.g. "2026-09-08T10:32:14+0900" (the format the sample field itself generates).
-    if let Ok(dt) = DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%z") {
-        return Some(dt.timestamp());
+    // Offset-bearing formats with a colonless offset, e.g.
+    // "2026-09-08T10:32:14+0900" (the format the sample field itself
+    // generates) or "2026-09-08 10:32:14+0900". `DateTimeOffset.TryParse`
+    // in .NET accepts a space in place of the ISO 8601 'T' separator; since
+    // chrono's format strings treat 'T'/' ' as literal characters (unlike
+    // .NET's parser), both separators are tried explicitly here.
+    for fmt in ["%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S%z"] {
+        if let Ok(dt) = DateTime::parse_from_str(s, fmt) {
+            return Some(dt.timestamp());
+        }
     }
-    // e.g. "2026-09-08T10:32:14+09:00" (RFC 3339 / colon-separated offset ISO 8601).
+    // e.g. "2026-09-08T10:32:14+09:00" or "2026-09-08 10:32:14+09:00"
+    // (RFC 3339 / colon-separated offset ISO 8601; chrono's RFC3339 parser
+    // already accepts either separator).
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Some(dt.timestamp());
     }
@@ -175,6 +184,24 @@ mod tests {
         // From the reference screenshot: "2026-08-24 17:42:23" -> 1787560943 (interpreted in JST).
         let unix = parse_flexible_datetime_to_unix("2026-08-24 17:42:23", &jst()).unwrap();
         assert_eq!(unix, 1787560943);
+    }
+
+    #[test]
+    fn parses_space_separated_datetime_with_colonless_offset() {
+        // .NET's DateTimeOffset.TryParse accepts this (space instead of 'T'),
+        // reported as a gap versus the original app's behavior.
+        let unix =
+            parse_flexible_datetime_to_unix("2026-09-10 05:20:32+0900", &jst()).unwrap();
+        let back = local_string_from_unix_seconds(unix, &jst()).unwrap();
+        assert_eq!(back, "2026/09/10 05:20:32");
+    }
+
+    #[test]
+    fn parses_space_separated_datetime_with_colon_offset() {
+        let unix =
+            parse_flexible_datetime_to_unix("2026-09-10 04:20:32+09:00", &jst()).unwrap();
+        let back = local_string_from_unix_seconds(unix, &jst()).unwrap();
+        assert_eq!(back, "2026/09/10 04:20:32");
     }
 
     #[test]
