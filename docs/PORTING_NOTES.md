@@ -12,9 +12,12 @@ for future contributors reviewing the diff between the two apps.
   standard Tauri/tray-app UX. Agreed with the app owner as an acceptable
   change.
 - **Startup window state**: the original starts minimized (still visible in
-  the taskbar as a minimized entry). This port starts with the main window
-  fully hidden (`visible: false` in `tauri.conf.json`) — tray icon only, no
-  taskbar entry. Restored via tray double-click (Windows) or the tray menu.
+  the taskbar as a minimized entry). This port instead starts with the main
+  window **shown** (`visible: true` in `tauri.conf.json`) — a deliberate
+  choice by the app owner, made after initially trying a fully-hidden,
+  tray-only startup. The window can still be hidden via the close button
+  (see "Window close button" below) and re-shown from the tray, but on
+  launch it is visible rather than tray-only.
 - **Out-of-range unixtime input**: `DateTimeOffset.FromUnixTimeSeconds` in
   the original throws an unhandled exception for out-of-range values. The
   Rust port returns `None` (empty output field) instead — a safety
