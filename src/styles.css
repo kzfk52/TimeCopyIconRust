@@ -1,0 +1,190 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f0f0f0;
+  --fg: #1a1a1a;
+  --border: #a0a0a0;
+  --input-bg: #ffffff;
+  --input-border: #7a7a7a;
+  --menu-hover: #cce8ff;
+  --focus-ring: #0078d4;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #2b2b2b;
+    --fg: #e8e8e8;
+    --border: #5a5a5a;
+    --input-bg: #3a3a3a;
+    --input-border: #6a6a6a;
+    --menu-hover: #3a5a78;
+    --focus-ring: #4cb0ff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    "Segoe UI",
+    "Yu Gothic UI",
+    "Hiragino Kaku Gothic ProN",
+    "Hiragino Sans",
+    system-ui,
+    sans-serif;
+  font-size: 12px;
+}
+
+/* --- Top "Action" menu bar, mirroring menuStrip1 --- */
+#action-menu {
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 2px 0;
+  flex: 0 0 auto;
+}
+
+.menu-root {
+  position: relative;
+  display: inline-block;
+}
+
+#menu-action-btn {
+  background: transparent;
+  border: none;
+  padding: 3px 10px;
+  font: inherit;
+  color: inherit;
+  cursor: default;
+  border-radius: 2px;
+}
+
+#menu-action-btn:hover {
+  background: var(--menu-hover);
+}
+
+#menu-action-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin: 0;
+  padding: 2px 0;
+  list-style: none;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.25);
+  min-width: 180px;
+  z-index: 10;
+}
+
+#menu-action-dropdown.hidden {
+  display: none;
+}
+
+#menu-action-dropdown li {
+  padding: 4px 14px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+#menu-action-dropdown li:hover {
+  background: var(--menu-hover);
+}
+
+/* --- Main form area --- */
+main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  min-height: 0;
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 8px 10px 10px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+legend {
+  padding: 0 4px;
+}
+
+#group-unixtime {
+  flex: 0 0 auto;
+}
+
+#group-iso8601 {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+label {
+  font-size: 12px;
+}
+
+.arrow-label {
+  text-align: center;
+}
+
+input[type="text"],
+textarea {
+  font: inherit;
+  color: inherit;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.15);
+  padding: 3px 6px;
+  width: 100%;
+}
+
+input[type="text"]:focus,
+textarea:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+input[readonly] {
+  background: var(--input-bg);
+}
+
+::selection {
+  background: var(--focus-ring);
+  color: #ffffff;
+}
+
+.iso-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.iso-row label {
+  flex: 0 0 auto;
+}
+
+.iso-row input {
+  flex: 1 1 auto;
+}
+
+#status-message {
+  flex: 1 1 auto;
+  min-height: 4em;
+  resize: none;
+}

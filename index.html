@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TimeCopyIconRust</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <nav id="action-menu">
+      <div class="menu-root">
+        <button type="button" id="menu-action-btn">Action</button>
+        <ul id="menu-action-dropdown" class="hidden">
+          <li data-action="announce_p">AnnounceP</li>
+          <li data-action="copy_unixtime">UnixTime値をコピー</li>
+          <li data-action="copy_ymd1">Y/m/d H:i:sをコピー</li>
+          <li data-action="copy_ymd2">YmdHisをコピー</li>
+          <li data-action="exit">終了(&amp;C)</li>
+        </ul>
+      </div>
+    </nav>
+
+    <main>
+      <fieldset id="group-unixtime">
+        <legend>unixtimeを普通にする</legend>
+        <label for="input-unixtime">unixtime</label>
+        <input id="input-unixtime" type="text" autocomplete="off" />
+        <label class="arrow-label">↓ LocalDateTime</label>
+        <input id="output-localdatetime" type="text" readonly />
+      </fieldset>
+
+      <fieldset id="group-iso8601">
+        <legend>日付け文字列をunixtime</legend>
+        <div class="iso-row">
+          <label for="input-iso8601">ISO 8601形式対応</label>
+          <input id="example-iso8601" type="text" readonly />
+        </div>
+        <input id="input-iso8601" type="text" autocomplete="off" />
+        <label class="arrow-label">↓</label>
+        <input id="output-unixtime" type="text" readonly />
+        <textarea id="status-message" readonly></textarea>
+      </fieldset>
+    </main>
+  </body>
+</html>
