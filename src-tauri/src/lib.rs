@@ -28,17 +28,16 @@ pub fn run() {
             tray::build_tray(app)?;
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // Closing the window (red-button / titlebar close) hides it
-            // instead of quitting, since this is a tray-resident app.
-            // The "終了(&C)" menu action calls `app.exit()` directly, which
-            // does not go through `CloseRequested`, so it always quits for
-            // real.
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
-            }
-        })
+        // No CloseRequested override here: the × / titlebar close button is
+        // left at Tauri's default behavior (close the window, then quit once
+        // no windows remain), matching the original WinForms app, where
+        // `FormClosing` never cancels the close — it only hides the tray
+        // icon before letting the form (and therefore the process) close.
+        // Users who want the app to keep running resident in the tray
+        // minimize the window instead of closing it, exactly as with the
+        // original. The tray menu's "ウィンドウを表示" item (and a plain
+        // left-click on the tray icon, see `tray.rs`) restores a minimized
+        // window.
         .invoke_handler(tauri::generate_handler![
             commands::action_copy_unixtime,
             commands::action_copy_ymd1,

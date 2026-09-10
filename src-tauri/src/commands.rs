@@ -6,7 +6,7 @@
 
 use chrono::Local;
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
 
@@ -52,11 +52,23 @@ pub fn action_copy_ymd2(app: AppHandle) -> Result<String, String> {
     copy_and_notify(&app, &text, &format!("コピーしました: {text}"))
 }
 
-/// "終了(&C)": hide the tray icon implicitly (it is dropped with the app)
-/// and exit for real, bypassing the CloseRequested hide-instead-of-close
-/// handler installed on the main window.
+/// "終了(&C)": force-destroy every window before exiting.
+///
+/// The window may still be alive (open or minimized) when this runs, e.g.
+/// when quitting from the tray while the main window was never closed. On
+/// Windows, calling `app.exit()` while a window still exists has been
+/// observed to fail to tear down its native window class cleanly (`Failed
+/// to unregister class Chrome_WidgetWin_0. Error = 1412
+/// (ERROR_CLASS_HAS_WINDOWS)`), leaving the process hanging around instead
+/// of fully exiting. Explicitly destroying
+/// (not closing — `destroy()` skips `CloseRequested` entirely, so it is not
+/// intercepted by the hide-on-close handler) every window first avoids that
+/// race.
 #[tauri::command]
 pub fn action_exit(app: AppHandle) {
+    for (_, window) in app.webview_windows() {
+        let _ = window.destroy();
+    }
     app.exit(0);
 }
 

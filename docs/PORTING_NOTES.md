@@ -15,18 +15,39 @@ for future contributors reviewing the diff between the two apps.
   the taskbar as a minimized entry). This port instead starts with the main
   window **shown** (`visible: true` in `tauri.conf.json`) — a deliberate
   choice by the app owner, made after initially trying a fully-hidden,
-  tray-only startup. The window can still be hidden via the close button
-  (see "Window close button" below) and re-shown from the tray, but on
-  launch it is visible rather than tray-only.
+  tray-only startup.
 - **Out-of-range unixtime input**: `DateTimeOffset.FromUnixTimeSeconds` in
   the original throws an unhandled exception for out-of-range values. The
   Rust port returns `None` (empty output field) instead — a safety
   improvement, not a faithfulness gap.
-- **Window close button**: hides the window instead of quitting (tray-resident
-  app). Only the "終了(&C)" menu item calls `app.exit()` and actually quits.
+- **Window close button — matches the original, not a change**: an earlier
+  draft of this port had the × / titlebar close button hide the window
+  instead of quitting (a "tray-resident app" pattern this port initially
+  assumed, without actually checking the original's behavior). The app
+  owner confirmed this was wrong: in the original, `FormClosing` never
+  cancels the close (it only hides the tray icon first), so × always fully
+  exits the app; minimizing is how the user keeps it running in the tray
+  when it's in the way. The port now matches this exactly — no
+  `CloseRequested` override at all, so × uses Tauri's default
+  close-then-exit-when-no-windows-remain behavior. The tray menu's
+  "ウィンドウを表示" item (and a plain left-click on the tray icon) is kept
+  as an added convenience for restoring a *minimized* window, since the
+  original has no equivalent restore-from-tray shortcut.
 
 ## Known platform limitations
 
+- **Windows exit hang (fixed)**: calling `app.exit(0)` from the "終了(&C)"
+  tray menu item while a window still existed (this was originally found
+  while the window was hidden, under the now-reverted hide-on-close design
+  above, but the underlying risk isn't specific to hidden windows) caused
+  Windows to log `Failed to unregister class Chrome_WidgetWin_0. Error =
+  1412` (`ERROR_CLASS_HAS_WINDOWS`) and the process did not fully
+  terminate. Reported by the app owner testing a Windows build (`npm run
+  app:dev`). Fixed by explicitly calling `WebviewWindow::destroy()` (which
+  skips `CloseRequested` entirely, unlike `close()`) on every window before
+  `app.exit(0)` in `commands::action_exit`. This is kept even though ×
+  no longer hides the window, since the tray "終了" item can still be used
+  while the window is open or minimized.
 - **Tray double-click**: `tray-icon`'s `DoubleClick` event is documented as
   **Windows only**. On macOS there is no equivalent — the double-click
   "copy current UnixTime" shortcut only works on Windows. macOS users must
@@ -83,11 +104,18 @@ These are planned as follow-up work.
 - `npm run tauri dev` under WSLg: app launches and stays running (no
   crash); main window renders and responds to input; tray icon
   registration fails silently per the Linux/WSL limitation above.
+- **Windows** (`npm run app:dev`, real hardware, by the app owner): tray
+  icon does appear and is usable. Two rounds of feedback from this testing
+  led to fixes: the (now-reverted) hide-on-close design stranding the
+  window, and the exit hang (both documented above under "Known platform
+  limitations"), plus reverting × to fully quit like the original.
 
 ## Not yet verified (requires real hardware)
 
-- Tray icon visibility/behavior on Windows and macOS
-- OS notification (toast/banner) display on Windows and macOS
-- Single-instance focus-existing-window behavior on Windows and macOS
-- macOS Dock icon hiding (`ActivationPolicy::Accessory`)
-- `cargo tauri build` release bundling on both platforms
+- macOS: tray icon, OS notifications, single-instance focus-existing-window,
+  Dock icon hiding (`ActivationPolicy::Accessory`), and the "show window"
+  tray menu item / left-click restore-from-minimized behavior.
+- Windows: OS notification (toast/banner) display, and re-testing the full
+  close(=quit)/minimize/restore-from-tray/tray-exit flow after the latest
+  round of fixes.
+- `cargo tauri build` release bundling (with installers) on both platforms.
