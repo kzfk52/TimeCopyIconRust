@@ -16,6 +16,20 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tray::show_main_window(app);
         }));
+
+        // Remembers window position/size/maximized-state across restarts
+        // (saved to `.window-state.json` in the app config dir, written on
+        // app exit). Not present in the original WinForms app — an added
+        // convenience the user asked for. `VISIBLE` is deliberately left
+        // out of the restored flags: the window always starts shown (see
+        // `tauri.conf.json`), independent of whatever visibility it had
+        // when last closed.
+        use tauri_plugin_window_state::StateFlags;
+        builder = builder.plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED)
+                .build(),
+        );
     }
 
     builder

@@ -34,6 +34,20 @@ for future contributors reviewing the diff between the two apps.
   as an added convenience for restoring a *minimized* window, since the
   original has no equivalent restore-from-tray shortcut.
 
+## Added features (not present in the original)
+
+- **Window position/size/maximized-state persistence**: the original has no
+  `Settings.settings` / registry-based persistence of any kind — every
+  launch starts at the WinForms designer's fixed location and size. This
+  port remembers window position, size, and maximized state across
+  restarts via `tauri-plugin-window-state`, requested by the app owner as
+  a new feature. Saved to `.window-state.json` in the app's config
+  directory, written on app exit (`RunEvent::Exit`, which still fires
+  after `commands::action_exit`'s explicit `destroy()` calls). Only
+  `StateFlags::POSITION | SIZE | MAXIMIZED` are restored — `VISIBLE` is
+  intentionally excluded so this doesn't interact with the
+  always-visible-on-startup behavior above.
+
 ## Known platform limitations
 
 - **Windows exit hang (fixed)**: calling `app.exit(0)` from the "終了(&C)"
@@ -119,3 +133,6 @@ These are planned as follow-up work.
   close(=quit)/minimize/restore-from-tray/tray-exit flow after the latest
   round of fixes.
 - `cargo tauri build` release bundling (with installers) on both platforms.
+- Window position/size/maximized-state persistence across restarts
+  (`tauri-plugin-window-state`) on both Windows and macOS, and multi-monitor
+  behavior when a saved position's monitor has since been disconnected.
