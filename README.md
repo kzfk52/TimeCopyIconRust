@@ -62,6 +62,8 @@ Windows/macOS向けのアイコンは `src-tauri/icons/` に、移植元の `sto
 - コード署名（Windows Authenticode / macOS codesign）
 - macOS 公証（notarization）
 - GitHub Actions による Windows/macOS クロスプラットフォームCI
+- 自動アップデート（GitHub Actions CI構築後に着手。調査結果・導入手順は
+  [docs/AUTO_UPDATE_PLAN.md](docs/AUTO_UPDATE_PLAN.md) を参照）
 
 ## License
 
