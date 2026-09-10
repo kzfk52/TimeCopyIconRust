@@ -23,7 +23,7 @@ Windows / macOS で動作するトレイ常駐型の時刻・日付変換ユー�
 
 ```bash
 npm install
-npm run tauri dev
+npm run app:dev
 ```
 
 Rust側のロジック（日時変換）の単体テスト:
@@ -35,9 +35,24 @@ cargo test
 
 ## ビルド
 
+インストーラー（Windows: msi/nsis、macOS: dmg/app バンドル）まで作る場合:
+
 ```bash
 npm run tauri build
 ```
+
+インストーラー生成をスキップし、実行バイナリのみをビルドする場合（Windowsは
+`.exe`、macOSは`.app`/実行ファイルが `src-tauri/target/release/` 配下に出力される。
+GitHub Actions等、各OSのランナー上でネイティブビルドする用途を想定):
+
+```bash
+npm run app:build
+```
+
+いずれもクロスコンパイルではなく、実行しているOS向けのバイナリが生成される点に注意
+（例: Linux上で実行してもWindows/macOS向けバイナリは作れない）。Windows/macOS向けの
+実バイナリは、各OS上（または後続のGitHub Actionsのwindows-latest/macos-latestランナー
+上）で実行する必要がある。
 
 Windows/macOS向けのアイコンは `src-tauri/icons/` に、移植元の `stopwatch.ico` から
 `cargo tauri icon` で生成済みです。
