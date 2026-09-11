@@ -36,8 +36,11 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            // Regular (not Accessory) so the app shows a Dock icon and
+            // appears in Cmd+Tab, matching the always-visible-on-launch
+            // window configured in `tauri.conf.json`.
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
             tray::build_tray(app)?;
             Ok(())
