@@ -50,6 +50,14 @@ GitHub Actions等、各OSのランナー上でネイティブビルドする用�
 npm run app:build
 ```
 
+macOSで `.app` バンドルのみ作成する場合（dmgは作らない）:
+
+```bash
+npm run app:build:mac
+```
+
+`src-tauri/target/release/bundle/macos/TimeCopyIconRust.app` が生成される。
+
 いずれもクロスコンパイルではなく、実行しているOS向けのバイナリが生成される点に注意
 （例: Linux上で実行してもWindows/macOS向けバイナリは作れない）。Windows/macOS向けの
 実バイナリは、各OS上（または後続のGitHub Actionsのwindows-latest/macos-latestランナー

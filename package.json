@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "app:dev": "tauri dev",
-    "app:build": "tauri build --no-bundle"
+    "app:build": "tauri build --no-bundle",
+    "app:build:mac": "tauri build --bundles app"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"
