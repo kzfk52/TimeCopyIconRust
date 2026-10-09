@@ -1,0 +1,167 @@
+# 本番用: Tauri アプリ(Windows)の自動ビルド + 署名(WIF + Tauri signCommand + CNG プロバイダ)
+# 対応: 手順書セクション 8-3 相当。証明書取得は 8-4-C(Secret Manager 一元管理)と同じ方式。
+#
+# 前提: 対象 Tauri プロジェクトの tauri.conf.json(または src-tauri/tauri.conf.json)に
+# 次の signCommand を追加しておくこと(Tauri v2 の bundle.windows.signCommand)。
+# %1 は Tauri が署名対象ファイルのパスに置き換えるプレースホルダ。
+#
+#   {
+#     "bundle": {
+#       "windows": {
+#         "signCommand": "powershell -ExecutionPolicy Bypass -File C:\\codesign\\sign-wrapper.ps1 -Target %1"
+#       }
+#     }
+#   }
+#
+# ★ signCommand には /csp "Google Cloud KMS Provider" のようなスペースを含む引数を直接
+#   書かないこと。Tauri が %1 をどう置換・トークン化するかは実装依存で、公式の他の
+#   signCommand 例(relic、artifact-signing-cli 等)もスペースを含まない引数しか使っていない。
+#   このワークフローでは実際の signtool 呼び出しを C:\codesign\sign-wrapper.ps1(下記「Write
+#   sign wrapper script」ステップで生成)に閉じ込め、引用符の処理は PowerShell 側に任せる。
+#
+# 注意:
+#   - signCommand を設定すると、証明書の直接指定を前提とした certificateThumbprint /
+#     digestAlgorithm / timestampUrl はバイパスされる(このワークフローの署名はカスタム
+#     コマンド側で完結するため設定不要)。
+#   - Tauri から渡される %1 が引用符なしで展開される場合に備え、sign-wrapper.ps1 側では
+#     $Target を必ず引用符付きで signtool に渡す(成果物パスにスペースが含まれても壊れないように)。
+#   - Tauri は生成される exe / msi / nsis インストーラすべてに対して signCommand を呼び出すため、
+#     このワークフロー側での個別の署名ステップは不要(ビルドの中で自動的に署名される)。
+#
+# 使うには、対象リポジトリの .github/workflows/ にこのファイルを置き、
+# GitHub の Variables を設定する(8-2 参照):
+#   Variables: GCP_WIF_PROVIDER, GCP_SERVICE_ACCOUNT
+#
+# パッケージマネージャは pnpm を例にしている(pnpm-lock.yaml が必須。npm の場合は
+# pnpm/action-setup を外し、「Install frontend dependencies」を npm ci に、
+# 「Build Tauri app」を npm run tauri build に置き換えること)。
+# pnpm/action-setup はバージョン指定を省略しているため、package.json に packageManager
+# フィールド(Corepack 有効化時に pnpm が既定で設定する)が必要。無ければ version を明示する。
+
+name: Sign Windows Artifact by GCP-HSM Digicert for org actions use
+
+on:
+  workflow_dispatch: # 手動実行でテスト
+  #push:
+  #  tags:
+  #    - "v*"
+permissions:
+  contents: read
+  id-token: write # WIF に必須
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          # pnpmバージョン指定がいるらしいので、package.json に packageManager フィールドが無い場合は version を明示すること
+          version: 11
+
+      # actions/setup-node#1357(pnpm 検出失敗)は corepack だけで pnpm を有効化する構成が
+      # 対象で、pnpm/action-setup を先に実行して pnpm を PATH に置いてから setup-node を呼ぶ
+      # この構成(公式ドキュメントが推奨する順序)には該当しないため、v6 で cache: pnpm を使う。
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Rust/Cargo のビルドキャッシュ(公式 Tauri ガイド推奨: workspaces は src-tauri を指す)
+      # ※ この Action は現時点で node20 を宣言しているため、ジョブ末尾に Node 20 非推奨の
+      #   警告が出ることがあるが、実行自体は node24 ランタイムにフォールバックされる
+      #   (actions/runner#4295 known issue)。機能的な問題ではないので無視してよい。
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          #prefix-key: "v1-rust-cache-windows"
+          # ${{ matrix.platform }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      ####### kokokara###############################################################
+      - name: Setup Windows HSM code signing
+        id: codesign
+        uses: daicolo/setup-windows-hsm-codesign@v1
+        #with:
+        #  workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+        #  service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      ## TauriのsignCommandを書き換えてこのHSM署名ラッパー呼び出しに書き換えてからビルドさせる
+      - name: Configure Tauri signCommand
+        shell: pwsh
+        env:
+          WRAPPER_PATH: ${{ steps.codesign.outputs.wrapper_path }}
+          TAURI_CONF_PATH: src-tauri/tauri.conf.json
+        run: |
+          $ErrorActionPreference = "Stop"
+          $conf = $env:TAURI_CONF_PATH
+          if (-not (Test-Path -LiteralPath $conf -PathType Leaf)) { throw "Tauri config not found: $conf" }
+
+          $json = Get-Content -LiteralPath $conf -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
+          if (-not $json.ContainsKey("bundle") -or $json["bundle"] -isnot [System.Collections.IDictionary]) { $json["bundle"] = @{} }
+          if (-not $json["bundle"].ContainsKey("windows") -or $json["bundle"]["windows"] -isnot [System.Collections.IDictionary]) { $json["bundle"]["windows"] = @{} }
+
+          $signCommand = "powershell -ExecutionPolicy Bypass -File $($env:WRAPPER_PATH) -Target %1"
+          $old = $json["bundle"]["windows"]["signCommand"]
+          if ($old -and $old -ne $signCommand) { Write-Host "Overwriting existing signCommand: $old" }
+          $json["bundle"]["windows"]["signCommand"] = $signCommand
+
+          [System.IO.File]::WriteAllText($conf, ($json | ConvertTo-Json -Depth 100) + "`n", (New-Object System.Text.UTF8Encoding($false)))
+          Write-Host "signCommand set in ${conf}: $signCommand"
+
+      # Tauri ビルド(バンドラが tauri.conf.json の signCommand を成果物ごとに自動で呼び出して署名する)
+      - name: Build Tauri app
+        run: npm tauri build --verbose
+
+      # 署名失敗時でも sign-wrapper.ps1 のログを表示・回収する
+      - name: Show signing logs
+        if: always()
+        shell: pwsh
+        env:
+          SIGN_LOG_DIR: ${{ steps.codesign.outputs.log_dir }}
+        run: |
+          Get-ChildItem (Join-Path $env:SIGN_LOG_DIR "*.log") -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "===== $($_.FullName) ====="
+            Get-Content $_.FullName
+          }
+
+      - name: Upload signing logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: signing-logs
+          path: ${{ steps.codesign.outputs.log_dir }}
+          if-no-files-found: ignore
+
+      ######################################################################
+
+      # 7. 署名検証(生成された exe / msi のうち代表1つを確認する例)
+      - name: Verify signature
+        shell: pwsh
+        run: |
+          $target = Get-ChildItem -Recurse -Path "src-tauri\target\release\bundle" -Include *.exe,*.msi | Select-Object -First 1
+          if (-not $target) { throw "署名対象の成果物が見つかりません(src-tauri/target/release/bundle 配下を確認してください)" }
+          $signed = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2Collection
+          $signed.Import($target.FullName)
+          Write-Host ("Target: " + $target.FullName)
+          Write-Host ("Embedded certs: " + $signed.Count)
+          $signed | ForEach-Object { Write-Host ("  - " + $_.Subject) }
+          signtool verify /pa /v $target.FullName
+
+      # 署名済み成果物を持ち帰る(確認用)
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: signed-tauri-app-windows
+          path: src-tauri/target/release/bundle
+
