@@ -91,7 +91,8 @@ jobs:
       ####### kokokara###############################################################
       - name: Setup Windows HSM code signing
         id: codesign
-        uses: daicolo/setup-windows-hsm-codesign@v1
+        #uses: daicolo/setup-windows-hsm-codesign@v1
+        uses: ./.github/actions/setup-windows-hsm-codesign
         #with:
         #  workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
         #  service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}

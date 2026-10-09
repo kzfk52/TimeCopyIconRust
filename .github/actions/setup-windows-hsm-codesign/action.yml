@@ -1,0 +1,286 @@
+# Composite action: Windows code signing setup with Google Cloud KMS HSM (CNG provider)
+#
+# Steps performed (shared pre-processing for every Windows signing job in the org):
+#   1. Authenticate to Google Cloud (Workload Identity Federation) + set up Cloud SDK
+#   2. Install the Google Cloud KMS CNG provider (v1.4+ is required for intermediate chain attachment)
+#   3. Fetch the full-chain PFX (no private key) from Secret Manager
+#   4. Split it into leaf.crt / intermediate.crt (optionally trust a test root)
+#   5. Generate the sign wrapper script called from tauri.conf.json signCommand
+#
+# Defaults point at PRODUCTION (codesign-cert / codesign-key). Only the WIF provider and the
+# service account are mandatory; callers pass them from their own vars/secrets.
+# For the test key/certificate, override secret_name / key_name / trust_root (see README.md).
+#
+# This action must be hosted in a repository that other repositories in the org are allowed to
+# use (Settings > Actions > General > Access), and consumed with: uses: daicolo/setup-windows-hsm-codesign@<ref>
+
+name: Setup Windows HSM code signing
+description: Authenticate with WIF, install the KMS CNG provider, fetch the certificate chain and generate the sign wrapper.
+
+inputs:
+  # ---- Production defaults (callers normally pass nothing; override only when needed) ----
+  # These are resource identifiers, not credentials: access is still gated by the WIF attribute
+  # condition (allowed GitHub organizations) and the service account IAM bindings.
+  workload_identity_provider:
+    description: Workload Identity Provider resource name (projects/NNN/locations/global/workloadIdentityPools/POOL/providers/PROVIDER).
+    required: false
+    default: projects/282284137065/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+  service_account:
+    description: Service account email used for signing.
+    required: false
+    default: codesign-ci@codesign-502002.iam.gserviceaccount.com
+
+  project_id:
+    description: Google Cloud project ID that hosts the KMS key and the Secret Manager secret.
+    required: false
+    default: codesign-502002
+  secret_name:
+    description: Secret Manager secret holding the full-chain PFX. Test uses codesign-cert-test.
+    required: false
+    default: codesign-cert
+  secret_version:
+    description: Secret version to fetch.
+    required: false
+    default: latest
+  kms_location:
+    description: Cloud KMS location.
+    required: false
+    default: asia-northeast1
+  kms_keyring:
+    description: Cloud KMS key ring.
+    required: false
+    default: codesign-keyring
+  kms_key_name:
+    description: Cloud KMS key name. Test uses codesign-test-key.
+    required: false
+    default: codesign-key
+  kms_key_version:
+    description: Cloud KMS crypto key version.
+    required: false
+    default: "1"
+  kms_key_resource:
+    description: Full cryptoKeyVersions resource path. When set, it overrides kms_location / kms_keyring / kms_key_name / kms_key_version.
+    required: false
+    default: ""
+  cng_version:
+    description: Google Cloud KMS CNG provider version (release tag cng-v<version>). Must be 1.4 or later.
+    required: false
+    default: "1.4"
+  timestamp_url:
+    description: RFC 3161 timestamp server URL.
+    required: false
+    default: http://timestamp.digicert.com
+  work_dir:
+    description: Working directory for certificates and the wrapper. Keep in sync with the signCommand in tauri.conf.json.
+    required: false
+    default: C:\codesign
+  trust_root:
+    description: "Register the self-signed root found in the PFX into the Windows trust stores. Only for the test CA (production DigiCert roots are built in)."
+    required: false
+    default: "false"
+
+outputs:
+  wrapper_path:
+    description: Path of the generated sign wrapper script.
+    value: ${{ steps.wrapper.outputs.wrapper_path }}
+  log_dir:
+    description: Directory where sign-wrapper.ps1 writes signtool logs. Use it to show or upload the logs in steps that always run.
+    value: ${{ steps.wrapper.outputs.log_dir }}
+  leaf_cert_path:
+    description: Path of the leaf certificate (PEM).
+    value: ${{ steps.certs.outputs.leaf_cert_path }}
+  intermediate_cert_path:
+    description: Path of the intermediate certificate (PEM).
+    value: ${{ steps.certs.outputs.intermediate_cert_path }}
+
+runs:
+  using: composite
+  steps:
+    # 1. Authenticate to Google Cloud (Workload Identity Federation)
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v3
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.service_account }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v3
+
+    # 2. Install the CNG provider (v1.4+ is required for intermediate chain attachment)
+    - name: Install Google Cloud KMS CNG provider
+      shell: pwsh
+      env:
+        CNG_VERSION: ${{ inputs.cng_version }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $ver = $env:CNG_VERSION
+        if ([version]$ver -lt [version]"1.4") { throw "CNG provider $ver is not supported (1.4 or later is required)" }
+        $url = "https://github.com/GoogleCloudPlatform/kms-integrations/releases/download/cng-v$ver/kmscng-$ver-windows-amd64.zip"
+        curl.exe --fail -L $url -o kmscng.zip
+        if ($LASTEXITCODE -ne 0) { throw "Failed to download $url" }
+        Expand-Archive -Path kmscng.zip -DestinationPath kmscng -Force
+        $dir = Get-ChildItem -Directory kmscng | Select-Object -First 1
+        $p = Start-Process msiexec.exe -ArgumentList "/i", "`"$($dir.FullName)\kmscng.msi`"", "/quiet", "/qn", "/norestart" -Wait -PassThru
+        if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "kmscng.msi install failed (exit code $($p.ExitCode))" }
+        Start-Sleep -Seconds 5
+        "C:\Program Files (x86)\Windows Kits\10\App Certification Kit" >> $env:GITHUB_PATH
+
+    # 3. Fetch the full-chain PFX from Secret Manager (binary, so --out-file)
+    - name: Fetch signing certificate (full-chain PFX) from Secret Manager
+      shell: pwsh
+      env:
+        WORK_DIR: ${{ inputs.work_dir }}
+        PROJECT_ID: ${{ inputs.project_id }}
+        SECRET_NAME: ${{ inputs.secret_name }}
+        SECRET_VERSION: ${{ inputs.secret_version }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        New-Item -Path $env:WORK_DIR -ItemType Directory -Force | Out-Null
+        gcloud secrets versions access $env:SECRET_VERSION --secret="$env:SECRET_NAME" `
+          --project="$env:PROJECT_ID" --out-file="$env:WORK_DIR\cert.p12"
+        if ($LASTEXITCODE -ne 0) { throw "Failed to fetch secret $env:SECRET_NAME" }
+
+    # 4. Split the PFX into leaf / intermediate (and optionally trust the test root)
+    - name: Prepare certificates (leaf + intermediate)
+      id: certs
+      shell: pwsh
+      env:
+        WORK_DIR: ${{ inputs.work_dir }}
+        TRUST_ROOT: ${{ inputs.trust_root }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $dir = $env:WORK_DIR
+        Add-Type -AssemblyName System.Security
+        $col = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2Collection
+        $col.Import("$dir\cert.p12", "", [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet)
+
+        function ConvertTo-Pem($cert) {
+          "-----BEGIN CERTIFICATE-----`r`n" + [System.Convert]::ToBase64String($cert.RawData, 'InsertLineBreaks') + "`r`n-----END CERTIFICATE-----`r`n"
+        }
+        function Get-BasicConstraints($cert) {
+          $cert.Extensions | Where-Object { $_.Oid.Value -eq "2.5.29.19" }
+        }
+
+        # Leaf (CA:false) -> leaf.crt
+        $leaf = $col | Where-Object {
+          $bc = Get-BasicConstraints $_
+          (-not $bc) -or (-not $bc.CertificateAuthority)
+        } | Select-Object -First 1
+        if (-not $leaf) { throw "No leaf certificate found in the PFX" }
+        [System.IO.File]::WriteAllText("$dir\leaf.crt", (ConvertTo-Pem $leaf))
+
+        # Intermediate (CA:true and not self-signed) -> intermediate.crt (never includes the leaf)
+        $int = $col | Where-Object {
+          $bc = Get-BasicConstraints $_
+          $bc -and $bc.CertificateAuthority -and ($_.Subject -ne $_.Issuer)
+        } | Select-Object -First 1
+        if (-not $int) { throw "No intermediate certificate found in the PFX (the PFX must be a full chain)" }
+        [System.IO.File]::WriteAllText("$dir\intermediate.crt", (ConvertTo-Pem $int))
+
+        Write-Host "=== leaf.crt / intermediate.crt prepared ==="
+        openssl x509 -in "$dir\leaf.crt" -noout -subject
+        openssl x509 -in "$dir\intermediate.crt" -noout -subject
+
+        # Test CA only: trust the self-signed root.
+        # Import-Certificate is used instead of $store.Add(), which can hang waiting for confirmation.
+        if ($env:TRUST_ROOT -eq "true") {
+          $root = $col | Where-Object {
+            $bc = Get-BasicConstraints $_
+            $bc -and $bc.CertificateAuthority -and ($_.Subject -eq $_.Issuer)
+          } | Select-Object -First 1
+          if (-not $root) { throw "trust_root=true but the PFX contains no self-signed root" }
+          [System.IO.File]::WriteAllText("$dir\root.crt", (ConvertTo-Pem $root))
+          Import-Certificate -FilePath "$dir\root.crt" -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
+          Import-Certificate -FilePath "$dir\root.crt" -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+          Write-Host ("Trusted test root registered: " + $root.Subject)
+        }
+
+        "leaf_cert_path=$dir\leaf.crt" >> $env:GITHUB_OUTPUT
+        "intermediate_cert_path=$dir\intermediate.crt" >> $env:GITHUB_OUTPUT
+
+    # 5. Generate the wrapper called from tauri.conf.json signCommand.
+    #    The signCommand stays a simple space-free form ("powershell -File ... -Target %1");
+    #    quoting of the CSP name and the key path is handled inside the wrapper.
+    - name: Write sign wrapper script
+      id: wrapper
+      shell: pwsh
+      env:
+        WORK_DIR: ${{ inputs.work_dir }}
+        PROJECT_ID: ${{ inputs.project_id }}
+        KMS_LOCATION: ${{ inputs.kms_location }}
+        KMS_KEYRING: ${{ inputs.kms_keyring }}
+        KMS_KEY_NAME: ${{ inputs.kms_key_name }}
+        KMS_KEY_VERSION: ${{ inputs.kms_key_version }}
+        KMS_KEY_RESOURCE: ${{ inputs.kms_key_resource }}
+        TIMESTAMP_URL: ${{ inputs.timestamp_url }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $dir = $env:WORK_DIR
+        if ($env:KMS_KEY_RESOURCE) {
+          $kmsKey = $env:KMS_KEY_RESOURCE
+        } else {
+          $kmsKey = "projects/$($env:PROJECT_ID)/locations/$($env:KMS_LOCATION)/keyRings/$($env:KMS_KEYRING)/cryptoKeys/$($env:KMS_KEY_NAME)/cryptoKeyVersions/$($env:KMS_KEY_VERSION)"
+        }
+
+        # Single-quoted here-string: nothing is expanded here; __TOKENS__ are replaced below.
+        $template = @'
+        param([Parameter(Mandatory=$true)][string]$Target)
+        $ErrorActionPreference = "Stop"
+
+        $workDir = "__WORK_DIR__"
+        $logDir = Join-Path $workDir "Logs"
+        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
+        # Millisecond stamp + target name keep logs distinct when several artifacts are signed within a second.
+        $logFile = Join-Path $logDir ("sign-{0:yyyyMMdd-HHmmss-fff}-{1}.log" -f (Get-Date), (Split-Path $Target -Leaf))
+
+        $signtoolArgs = @(
+          "sign", "/v", "/debug",
+          "/fd", "sha256", "/tr", "__TIMESTAMP_URL__", "/td", "sha256",
+          "/f", (Join-Path $workDir "leaf.crt"), "/ac", (Join-Path $workDir "intermediate.crt"),
+          "/csp", "Google Cloud KMS Provider",
+          "/kc", "__KMS_KEY__",
+          $Target
+        )
+
+        Write-Host "=== sign-wrapper.ps1 ==="
+        Write-Host "Target : $Target"
+        Write-Host "Exists : $(Test-Path $Target)"
+        Write-Host "LogFile: $logFile"
+        Write-Host "Command: signtool $($signtoolArgs -join ' ')"
+        Write-Host "========================"
+
+        try {
+          # Under "Stop", native stderr merged by 2>&1 becomes a terminating error; relax it only while signtool runs.
+          # Each record is stringified so ErrorRecord objects are logged as plain text.
+          $ErrorActionPreference = "Continue"
+          & signtool.exe @signtoolArgs 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $logFile | ForEach-Object { Write-Host $_ }
+          $exitCode = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+        }
+        catch {
+          $exitCode = 1
+          $_ | Out-String | Tee-Object -FilePath $logFile -Append | ForEach-Object { Write-Host $_ }
+        }
+
+        if ($exitCode -ne 0) {
+          Write-Host "`n=== signtool FAILED (exit code $exitCode) ===" -ForegroundColor Red
+          Write-Host "Full log saved to: $logFile" -ForegroundColor Red
+          Write-Host "--- log tail ---" -ForegroundColor Red
+          Get-Content $logFile -Tail 40 | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+          Write-Host "----------------" -ForegroundColor Red
+          throw "signtool failed with exit code $exitCode (target: $Target, log: $logFile)"
+        }
+
+        Write-Host "signtool succeeded for $Target"
+        '@
+
+        $script = $template.
+          Replace("__WORK_DIR__", $dir).
+          Replace("__TIMESTAMP_URL__", $env:TIMESTAMP_URL).
+          Replace("__KMS_KEY__", $kmsKey)
+        $wrapper = Join-Path $dir "sign-wrapper.ps1"
+        Set-Content -Path $wrapper -Value $script -Encoding UTF8
+
+        "wrapper_path=$wrapper" >> $env:GITHUB_OUTPUT
+        "log_dir=$(Join-Path $dir 'Logs')" >> $env:GITHUB_OUTPUT
+        Write-Host "Wrapper written: $wrapper (key: $kmsKey)"
