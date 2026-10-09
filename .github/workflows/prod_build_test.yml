@@ -56,12 +56,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          # pnpmバージョン指定がいるらしいので、package.json に packageManager フィールドが無い場合は version を明示すること
-          version: 11
-
       # actions/setup-node#1357(pnpm 検出失敗)は corepack だけで pnpm を有効化する構成が
       # 対象で、pnpm/action-setup を先に実行して pnpm を PATH に置いてから setup-node を呼ぶ
       # この構成(公式ドキュメントが推奨する順序)には該当しないため、v6 で cache: pnpm を使う。
@@ -69,7 +63,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
+          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -86,7 +80,7 @@ jobs:
           # ${{ matrix.platform }}
 
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        run: npm ci
 
       ####### kokokara###############################################################
       - name: Setup Windows HSM code signing
