@@ -116,7 +116,7 @@ jobs:
 
       # Tauri ビルド(バンドラが tauri.conf.json の signCommand を成果物ごとに自動で呼び出して署名する)
       - name: Build Tauri app
-        run: npm tauri build --verbose
+        run: npm run tauri build --verbose
 
       # 署名失敗時でも sign-wrapper.ps1 のログを表示・回収する
       - name: Show signing logs
